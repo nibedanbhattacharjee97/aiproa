@@ -1,6 +1,5 @@
 import html
 from typing import Optional, Tuple
-
 import folium
 import ollama
 import pandas as pd
