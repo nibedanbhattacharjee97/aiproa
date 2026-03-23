@@ -377,15 +377,15 @@ def geocode_district(district: str) -> Optional[Tuple[float, float]]:
 
 def run_market_analysis(filter_type: str, location_value: str, district: str, colleges: list[str]) -> str:
     prompt = f"""
-You are a professional market analyst.
+You are a professional market analyst specializing in West Bengal's education hubs.
 
-Analyze the business potential of this location based on student presence.
+Analyze the business potential of this specific location.
 
 Location Details:
-Filter Type: {filter_type}
-Selected Value: {location_value}
+Filter Mode: {filter_type}
+Location Selection: {location_value}
 District: {district}
-Nearby Colleges: {", ".join(colleges)}
+Colleges in Vicinity: {", ".join(colleges)}
 
 Provide analysis in this format:
 1. Student Population Potential
@@ -393,33 +393,17 @@ Provide analysis in this format:
 3. Market Demand Level (Low/Medium/High with reason)
 4. Startup Ideas (practical suggestions)
 
-Keep it simple, practical, and structured.
+Keep it professional and scannable.
 """
     return ask_ollama(prompt)
 
 def run_industry_analysis(filter_type: str, location_value: str, district: str, colleges: list[str]) -> str:
     prompt = f"""
-You are a local industrial and business opportunity analyst.
+Identify exactly 5 real and major companies or industrial units located in or near the following location in West Bengal:
+- District: {district}
+- PIN Code: {location_value if filter_type == "PIN Code" else 'N/A'}
 
-Analyze the local industrial/company potential of this location in West Bengal.
-
-Location Details:
-Filter Type: {filter_type}
-Selected Value: {location_value}
-District: {district}
-Nearby Colleges: {", ".join(colleges)}
-
-Give a practical structured response in this format:
-1. Possible Local Industry Presence
-2. Types of Companies/Factories/Business Segments that may grow here
-3. Employment & Internship Potential for Students
-4. Supply/Service Business Opportunities
-5. Overall Industrial Potential (Low/Medium/High with reason)
-
-Important:
-- Keep it practical and realistic
-- Focus on local business, SME, factory, service sector, warehouse, logistics, training center, IT support, manufacturing support, food processing, retail distribution, healthcare support, education support, and transport-related opportunities
-- Write in simple language
+Provide ONLY a numbered list of the 5 company names. Do not provide descriptions, headers, or any other text.
 """
     return ask_ollama(prompt)
 
@@ -605,18 +589,6 @@ with right_col:
     st.markdown('</div>', unsafe_allow_html=True)
 
 # ---------------------------------------------------
-# TABLE VIEW
-# ---------------------------------------------------
-st.markdown('<div class="panel">', unsafe_allow_html=True)
-st.markdown('<div class="section-title">📋 College Data</div>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="section-note">View all colleges for the selected filter.</div>',
-    unsafe_allow_html=True
-)
-st.dataframe(filtered[["College", "Address", "District", "PIN"]], use_container_width=True)
-st.markdown('</div>', unsafe_allow_html=True)
-
-# ---------------------------------------------------
 # MARKET ANALYSIS
 # ---------------------------------------------------
 st.markdown('<div class="panel">', unsafe_allow_html=True)
@@ -643,18 +615,17 @@ st.markdown('</div>', unsafe_allow_html=True)
 # INDUSTRIAL ANALYSIS
 # ---------------------------------------------------
 st.markdown('<div class="panel">', unsafe_allow_html=True)
-st.markdown('<div class="section-title">🏭 Local Industrial / Company Analysis</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="section-note">Generate a practical industrial and company opportunity analysis using TinyLlama.</div>',
+    '<div class="section-note">AI will identify specific major companies based on your selected PIN/District.</div>',
     unsafe_allow_html=True
 )
 
 if st.button("Run Local Industrial Analysis"):
-    with st.spinner("Generating local industrial/company analysis..."):
+    with st.spinner("Identifying local companies..."):
         industry_result = run_industry_analysis(filter_mode, analysis_location, district, all_college_names)
         st.markdown('<div class="result-box">', unsafe_allow_html=True)
-        st.markdown("#### Industrial / Company Analysis Result")
-        st.write(industry_result)
+        st.markdown("#### Local Prospective Employers")
+        st.markdown(industry_result)
         st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown('</div>', unsafe_allow_html=True)
