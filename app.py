@@ -1,10 +1,10 @@
 import html
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
 import folium
-import ollama
 import pandas as pd
 import pdfplumber
+import requests
 import streamlit as st
 from geopy.exc import GeocoderServiceError, GeocoderTimedOut
 from geopy.geocoders import Nominatim
@@ -17,7 +17,7 @@ st.set_page_config(
     page_title="WB College Market Analyzer",
     page_icon="🎓",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="collapsed",
 )
 
 # ---------------------------------------------------
@@ -275,7 +275,15 @@ st.markdown("""
 # CONFIG
 # ---------------------------------------------------
 PDF_PATH = "wb_46_colleges.pdf"
-OLLAMA_MODEL = "tinyllama"
+
+# These must be added in Streamlit secrets
+# Example:
+# MODEL_API_URL = "https://api.openai.com/v1/chat/completions"
+# MODEL_API_KEY = "your_api_key"
+# MODEL_NAME = "gpt-4o-mini"
+MODEL_API_URL = st.secrets.get("MODEL_API_URL", "")
+MODEL_API_KEY = st.secrets.get("MODEL_API_KEY", "")
+MODEL_NAME = st.secrets.get("MODEL_NAME", "gpt-4o-mini")
 
 # ---------------------------------------------------
 # HELPERS
@@ -292,22 +300,74 @@ def html_escape(value) -> str:
 def get_geolocator():
     return Nominatim(user_agent="wb_college_market_app_clean")
 
-def ask_ollama(prompt: str) -> str:
+def is_ai_configured() -> bool:
+    return bool(MODEL_API_URL and MODEL_API_KEY and MODEL_NAME)
+
+def extract_model_text(data: dict) -> str:
+    """
+    Tries common response formats from OpenAI-compatible APIs.
+    """
+    # OpenAI-style chat completions
     try:
-        response = ollama.chat(
-            model=OLLAMA_MODEL,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return response["message"]["content"]
-    except Exception as e:
+        return data["choices"][0]["message"]["content"]
+    except Exception:
+        pass
+
+    # Some providers may use output_text
+    try:
+        return data["output_text"]
+    except Exception:
+        pass
+
+    # Fallback
+    return str(data)
+
+def ask_model(prompt: str) -> str:
+    if not is_ai_configured():
         return (
-            "AI analysis could not be generated.\n\n"
-            "Check these:\n"
-            "1. Ollama is installed and running\n"
-            f"2. Model '{OLLAMA_MODEL}' is installed\n"
-            "3. If hosted in cloud, Ollama service may not be available there\n\n"
-            f"Technical error: {e}"
+            "AI analysis is not configured.\n\n"
+            "Add these in Streamlit secrets:\n"
+            "1. MODEL_API_URL\n"
+            "2. MODEL_API_KEY\n"
+            "3. MODEL_NAME\n\n"
+            "Example:\n"
+            'MODEL_API_URL = "https://api.openai.com/v1/chat/completions"\n'
+            'MODEL_API_KEY = "your_api_key"\n'
+            'MODEL_NAME = "gpt-4o-mini"'
         )
+
+    try:
+        response = requests.post(
+            MODEL_API_URL,
+            headers={
+                "Authorization": f"Bearer {MODEL_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": MODEL_NAME,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a practical Indian market analyst. "
+                            "Write concise, useful, structured answers."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.7,
+            },
+            timeout=90,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return extract_model_text(data)
+    except requests.exceptions.Timeout:
+        return "AI analysis timed out. Please try again."
+    except requests.exceptions.HTTPError as e:
+        return f"AI API HTTP error: {e}"
+    except Exception as e:
+        return f"AI analysis could not be generated.\n\nTechnical error: {e}"
 
 # ---------------------------------------------------
 # LOAD DATA
@@ -330,12 +390,14 @@ def load_data_from_pdf(pdf_path: str) -> pd.DataFrame:
                     pin = safe_text(row[3])
 
                     if college and address and district and pin:
-                        rows.append({
-                            "College": college,
-                            "Address": address,
-                            "District": district,
-                            "PIN": pin
-                        })
+                        rows.append(
+                            {
+                                "College": college,
+                                "Address": address,
+                                "District": district,
+                                "PIN": pin,
+                            }
+                        )
 
     df = pd.DataFrame(rows)
     if df.empty:
@@ -357,7 +419,7 @@ def geocode_address(address: str) -> Optional[Tuple[float, float]]:
         return None
     return None
 
-def run_market_analysis(pin: str, district: str, colleges: list[str]) -> str:
+def run_market_analysis(pin: str, district: str, colleges: List[str]) -> str:
     prompt = f"""
 You are a professional market analyst.
 
@@ -376,9 +438,9 @@ Provide analysis in this format:
 
 Keep it simple, practical, and structured.
 """
-    return ask_ollama(prompt)
+    return ask_model(prompt)
 
-def run_industry_analysis(pin: str, district: str, colleges: list[str]) -> str:
+def run_industry_analysis(pin: str, district: str, colleges: List[str]) -> str:
     prompt = f"""
 You are a local industrial and business opportunity analyst.
 
@@ -401,7 +463,7 @@ Important:
 - Focus on local business, SME, factory, service sector, warehouse, logistics, training center, IT support, manufacturing support, food processing, retail distribution, healthcare support, education support, and transport-related opportunities
 - Write in simple language
 """
-    return ask_ollama(prompt)
+    return ask_model(prompt)
 
 # ---------------------------------------------------
 # MAIN LOAD
@@ -436,10 +498,10 @@ with f2:
             Choose a PIN code to view matching colleges, map location, and AI-based market analysis.
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
-st.markdown('</div>', unsafe_allow_html=True)
+st.markdown("</div>", unsafe_allow_html=True)
 
 filtered = df[df["PIN"].astype(str) == str(selected_pin)].reset_index(drop=True)
 
@@ -456,31 +518,40 @@ college_count = len(filtered)
 m1, m2, m3 = st.columns(3)
 
 with m1:
-    st.markdown(f"""
+    st.markdown(
+        f"""
     <div class="metric-card">
         <div class="metric-label">District</div>
         <div class="metric-value">{html_escape(district)}</div>
         <div class="metric-sub">Selected area district</div>
     </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
 with m2:
-    st.markdown(f"""
+    st.markdown(
+        f"""
     <div class="metric-card">
         <div class="metric-label">PIN Code</div>
         <div class="metric-value">{html_escape(selected_pin)}</div>
         <div class="metric-sub">Active market location</div>
     </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
 with m3:
-    st.markdown(f"""
+    st.markdown(
+        f"""
     <div class="metric-card">
         <div class="metric-label">Colleges Found</div>
         <div class="metric-value">{college_count}</div>
         <div class="metric-sub">Institutions in this PIN</div>
     </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
 st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
 
@@ -488,7 +559,6 @@ st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
 # COLLEGE + MAP
 # ---------------------------------------------------
 left_col, right_col = st.columns([1, 1], gap="large")
-
 college_options = filtered["College"].tolist()
 
 with left_col:
@@ -496,25 +566,28 @@ with left_col:
     st.markdown('<div class="section-title">🎓 Colleges</div>', unsafe_allow_html=True)
     st.markdown(
         '<div class="section-note">Select a college to view its address and map location.</div>',
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
     selected_college = st.radio(
         "Choose College",
         options=college_options,
-        label_visibility="collapsed"
+        label_visibility="collapsed",
     )
 
     selected_row = filtered[filtered["College"] == selected_college].iloc[0]
 
-    st.markdown(f"""
+    st.markdown(
+        f"""
     <div class="college-box">
         <div class="college-name">{html_escape(selected_row['College'])}</div>
         <div class="college-address">📍 {html_escape(selected_row['Address'])}</div>
     </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 with right_col:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
@@ -528,13 +601,21 @@ with right_col:
         folium.Marker(
             [lat, lon],
             popup=safe_text(selected_row["College"]),
-            tooltip=safe_text(selected_row["College"])
+            tooltip=safe_text(selected_row["College"]),
         ).add_to(fmap)
         st_folium(fmap, width=None, height=430)
     else:
         st.warning("Map location could not be found for this address.")
 
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# ---------------------------------------------------
+# MODEL STATUS
+# ---------------------------------------------------
+if is_ai_configured():
+    st.success(f"AI connected: {MODEL_NAME}")
+else:
+    st.info("AI is not configured yet. Add MODEL_API_URL, MODEL_API_KEY and MODEL_NAME in Streamlit secrets.")
 
 # ---------------------------------------------------
 # MARKET ANALYSIS
@@ -542,8 +623,8 @@ with right_col:
 st.markdown('<div class="panel">', unsafe_allow_html=True)
 st.markdown('<div class="section-title">📊 Market Analysis</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="section-note">Generate PIN-wise business and student market analysis using TinyLlama.</div>',
-    unsafe_allow_html=True
+    '<div class="section-note">Generate PIN-wise business and student market analysis using a hosted AI model.</div>',
+    unsafe_allow_html=True,
 )
 
 all_college_names = filtered["College"].tolist()
@@ -554,9 +635,9 @@ if st.button("Run Market Analysis"):
         st.markdown('<div class="result-box">', unsafe_allow_html=True)
         st.markdown("#### Analysis Result")
         st.write(analysis_result)
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
-st.markdown('</div>', unsafe_allow_html=True)
+st.markdown("</div>", unsafe_allow_html=True)
 
 # ---------------------------------------------------
 # INDUSTRIAL ANALYSIS
@@ -564,8 +645,8 @@ st.markdown('</div>', unsafe_allow_html=True)
 st.markdown('<div class="panel">', unsafe_allow_html=True)
 st.markdown('<div class="section-title">🏭 Local Industrial / Company Analysis</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="section-note">Generate a practical industrial and company opportunity analysis for this PIN using TinyLlama.</div>',
-    unsafe_allow_html=True
+    '<div class="section-note">Generate a practical industrial and company opportunity analysis for this PIN using a hosted AI model.</div>',
+    unsafe_allow_html=True,
 )
 
 if st.button("Run Local Industrial Analysis"):
@@ -574,6 +655,6 @@ if st.button("Run Local Industrial Analysis"):
         st.markdown('<div class="result-box">', unsafe_allow_html=True)
         st.markdown("#### Industrial / Company Analysis Result")
         st.write(industry_result)
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
-st.markdown('</div>', unsafe_allow_html=True)
+st.markdown("</div>", unsafe_allow_html=True)
