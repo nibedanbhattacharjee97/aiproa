@@ -25,7 +25,6 @@ st.set_page_config(
 # ---------------------------------------------------
 st.markdown("""
 <style>
-    /* ========= GLOBAL ========= */
     .stApp {
         background: linear-gradient(135deg, #dff3ef 0%, #edf8f6 55%, #f9fcfc 100%);
     }
@@ -47,7 +46,6 @@ st.markdown("""
         font-weight: 800 !important;
     }
 
-    /* ========= HEADER ========= */
     .app-header {
         background: rgba(255,255,255,0.72);
         border: 1px solid #d8e6e2;
@@ -69,7 +67,6 @@ st.markdown("""
         color: #2d2d2d !important;
     }
 
-    /* ========= PANELS ========= */
     .panel {
         background: rgba(255,255,255,0.96);
         border: 1px solid #d9e7e3;
@@ -92,7 +89,6 @@ st.markdown("""
         margin-bottom: 0.8rem;
     }
 
-    /* ========= METRICS ========= */
     .metric-card {
         background: rgba(255,255,255,0.98);
         border: 1px solid #d9e7e3;
@@ -124,7 +120,6 @@ st.markdown("""
         color: #333333 !important;
     }
 
-    /* ========= COLLEGE CARD ========= */
     .college-box {
         background: #ffffff;
         border: 1px solid #dbe7e4;
@@ -147,7 +142,6 @@ st.markdown("""
         line-height: 1.4;
     }
 
-    /* ========= RESULT BOX ========= */
     .result-box {
         background: #ffffff;
         border: 1px solid #dbe7e4;
@@ -156,7 +150,6 @@ st.markdown("""
         margin-top: 10px;
     }
 
-    /* ========= BUTTONS ========= */
     .stButton > button {
         width: 100%;
         background: #111111 !important;
@@ -178,7 +171,6 @@ st.markdown("""
         color: #ffffff !important;
     }
 
-    /* ========= SELECTBOX FIX ========= */
     .stSelectbox label {
         color: #111111 !important;
         font-weight: 700 !important;
@@ -242,7 +234,6 @@ st.markdown("""
         color: #111111 !important;
     }
 
-    /* ========= RADIO ========= */
     .stRadio label {
         color: #111111 !important;
         font-weight: 700 !important;
@@ -281,7 +272,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------
-# FILE PATH
+# CONFIG
 # ---------------------------------------------------
 PDF_PATH = "wb_46_colleges.pdf"
 OLLAMA_MODEL = "tinyllama"
@@ -311,10 +302,10 @@ def ask_ollama(prompt: str) -> str:
     except Exception as e:
         return (
             "AI analysis could not be generated.\n\n"
-            "Possible reasons:\n"
-            "1. Ollama is not running on this machine\n"
-            f"2. The model '{OLLAMA_MODEL}' is not installed\n"
-            "3. Cloud hosting usually does not support local Ollama directly\n\n"
+            "Check these:\n"
+            "1. Ollama is installed and running\n"
+            f"2. Model '{OLLAMA_MODEL}' is installed\n"
+            "3. If hosted in cloud, Ollama service may not be available there\n\n"
             f"Technical error: {e}"
         )
 
@@ -347,18 +338,15 @@ def load_data_from_pdf(pdf_path: str) -> pd.DataFrame:
                         })
 
     df = pd.DataFrame(rows)
-
     if df.empty:
         return df
 
-    df = df.dropna().drop_duplicates().reset_index(drop=True)
-    return df
+    return df.dropna().drop_duplicates().reset_index(drop=True)
 
 @st.cache_data(show_spinner=False)
 def geocode_address(address: str) -> Optional[Tuple[float, float]]:
     geolocator = get_geolocator()
     query = f"{address}, West Bengal, India"
-
     try:
         loc = geolocator.geocode(query, timeout=10)
         if loc:
@@ -367,7 +355,6 @@ def geocode_address(address: str) -> Optional[Tuple[float, float]]:
         return None
     except Exception:
         return None
-
     return None
 
 def run_market_analysis(pin: str, district: str, colleges: list[str]) -> str:
@@ -417,7 +404,7 @@ Important:
     return ask_ollama(prompt)
 
 # ---------------------------------------------------
-# LOAD MAIN DATA
+# MAIN LOAD
 # ---------------------------------------------------
 try:
     df = load_data_from_pdf(PDF_PATH)
@@ -572,7 +559,7 @@ if st.button("Run Market Analysis"):
 st.markdown('</div>', unsafe_allow_html=True)
 
 # ---------------------------------------------------
-# LOCAL INDUSTRIAL / COMPANY ANALYSIS
+# INDUSTRIAL ANALYSIS
 # ---------------------------------------------------
 st.markdown('<div class="panel">', unsafe_allow_html=True)
 st.markdown('<div class="section-title">🏭 Local Industrial / Company Analysis</div>', unsafe_allow_html=True)
