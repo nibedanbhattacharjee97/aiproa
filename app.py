@@ -1,11 +1,13 @@
-import pdfplumber
-import pandas as pd
-import streamlit as st
-import ollama
-import folium
+import html
+from typing import Optional, Tuple
 
+import folium
+import ollama
+import pandas as pd
+import pdfplumber
+import streamlit as st
+from geopy.exc import GeocoderServiceError, GeocoderTimedOut
 from geopy.geocoders import Nominatim
-from geopy.exc import GeocoderTimedOut, GeocoderServiceError
 from streamlit_folium import st_folium
 
 # ---------------------------------------------------
@@ -282,6 +284,39 @@ st.markdown("""
 # FILE PATH
 # ---------------------------------------------------
 PDF_PATH = "wb_46_colleges.pdf"
+OLLAMA_MODEL = "tinyllama"
+
+# ---------------------------------------------------
+# HELPERS
+# ---------------------------------------------------
+def safe_text(value) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+def html_escape(value) -> str:
+    return html.escape(safe_text(value))
+
+@st.cache_resource
+def get_geolocator():
+    return Nominatim(user_agent="wb_college_market_app_clean")
+
+def ask_ollama(prompt: str) -> str:
+    try:
+        response = ollama.chat(
+            model=OLLAMA_MODEL,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response["message"]["content"]
+    except Exception as e:
+        return (
+            "AI analysis could not be generated.\n\n"
+            "Possible reasons:\n"
+            "1. Ollama is not running on this machine\n"
+            f"2. The model '{OLLAMA_MODEL}' is not installed\n"
+            "3. Cloud hosting usually does not support local Ollama directly\n\n"
+            f"Technical error: {e}"
+        )
 
 # ---------------------------------------------------
 # LOAD DATA
@@ -293,22 +328,37 @@ def load_data_from_pdf(pdf_path: str) -> pd.DataFrame:
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
             table = page.extract_table()
-            if table:
+            if table and len(table) > 1:
                 for row in table[1:]:
-                    if row and len(row) >= 4:
+                    if not row or len(row) < 4:
+                        continue
+
+                    college = safe_text(row[0])
+                    address = safe_text(row[1])
+                    district = safe_text(row[2])
+                    pin = safe_text(row[3])
+
+                    if college and address and district and pin:
                         rows.append({
-                            "College": str(row[0]).strip(),
-                            "Address": str(row[1]).strip(),
-                            "District": str(row[2]).strip(),
-                            "PIN": str(row[3]).strip()
+                            "College": college,
+                            "Address": address,
+                            "District": district,
+                            "PIN": pin
                         })
 
-    return pd.DataFrame(rows).dropna().reset_index(drop=True)
+    df = pd.DataFrame(rows)
+
+    if df.empty:
+        return df
+
+    df = df.dropna().drop_duplicates().reset_index(drop=True)
+    return df
 
 @st.cache_data(show_spinner=False)
-def geocode_address(address: str):
-    geolocator = Nominatim(user_agent="wb_college_market_app_clean")
+def geocode_address(address: str) -> Optional[Tuple[float, float]]:
+    geolocator = get_geolocator()
     query = f"{address}, West Bengal, India"
+
     try:
         loc = geolocator.geocode(query, timeout=10)
         if loc:
@@ -317,6 +367,7 @@ def geocode_address(address: str):
         return None
     except Exception:
         return None
+
     return None
 
 def run_market_analysis(pin: str, district: str, colleges: list[str]) -> str:
@@ -338,11 +389,7 @@ Provide analysis in this format:
 
 Keep it simple, practical, and structured.
 """
-    response = ollama.chat(
-        model="tinyllama",
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return response["message"]["content"]
+    return ask_ollama(prompt)
 
 def run_industry_analysis(pin: str, district: str, colleges: list[str]) -> str:
     prompt = f"""
@@ -367,16 +414,18 @@ Important:
 - Focus on local business, SME, factory, service sector, warehouse, logistics, training center, IT support, manufacturing support, food processing, retail distribution, healthcare support, education support, and transport-related opportunities
 - Write in simple language
 """
-    response = ollama.chat(
-        model="tinyllama",
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return response["message"]["content"]
+    return ask_ollama(prompt)
 
+# ---------------------------------------------------
+# LOAD MAIN DATA
+# ---------------------------------------------------
 try:
     df = load_data_from_pdf(PDF_PATH)
 except FileNotFoundError:
     st.error("PDF file not found. Keep 'wb_46_colleges.pdf' in the same folder as app.py.")
+    st.stop()
+except Exception as e:
+    st.error(f"Failed to load PDF data: {e}")
     st.stop()
 
 if df.empty:
@@ -390,7 +439,7 @@ st.markdown('<div class="panel">', unsafe_allow_html=True)
 f1, f2 = st.columns([1.1, 2.6])
 
 with f1:
-    pin_options = sorted(df["PIN"].unique().tolist())
+    pin_options = sorted(df["PIN"].astype(str).unique().tolist())
     selected_pin = st.selectbox("Select PIN Code", pin_options, index=0)
 
 with f2:
@@ -402,15 +451,16 @@ with f2:
         """,
         unsafe_allow_html=True
     )
+
 st.markdown('</div>', unsafe_allow_html=True)
 
-filtered = df[df["PIN"] == selected_pin].reset_index(drop=True)
+filtered = df[df["PIN"].astype(str) == str(selected_pin)].reset_index(drop=True)
 
 if filtered.empty:
     st.warning("No colleges found for the selected PIN code.")
     st.stop()
 
-district = filtered.iloc[0]["District"]
+district = safe_text(filtered.iloc[0]["District"])
 college_count = len(filtered)
 
 # ---------------------------------------------------
@@ -422,7 +472,7 @@ with m1:
     st.markdown(f"""
     <div class="metric-card">
         <div class="metric-label">District</div>
-        <div class="metric-value">{district}</div>
+        <div class="metric-value">{html_escape(district)}</div>
         <div class="metric-sub">Selected area district</div>
     </div>
     """, unsafe_allow_html=True)
@@ -431,7 +481,7 @@ with m2:
     st.markdown(f"""
     <div class="metric-card">
         <div class="metric-label">PIN Code</div>
-        <div class="metric-value">{selected_pin}</div>
+        <div class="metric-value">{html_escape(selected_pin)}</div>
         <div class="metric-sub">Active market location</div>
     </div>
     """, unsafe_allow_html=True)
@@ -472,8 +522,8 @@ with left_col:
 
     st.markdown(f"""
     <div class="college-box">
-        <div class="college-name">{selected_row['College']}</div>
-        <div class="college-address">📍 {selected_row['Address']}</div>
+        <div class="college-name">{html_escape(selected_row['College'])}</div>
+        <div class="college-address">📍 {html_escape(selected_row['Address'])}</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -482,15 +532,16 @@ with left_col:
 with right_col:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="section-title">🗺️ College Map</div>', unsafe_allow_html=True)
-    coords = geocode_address(selected_row["Address"])
+
+    coords = geocode_address(safe_text(selected_row["Address"]))
 
     if coords:
         lat, lon = coords
         fmap = folium.Map(location=[lat, lon], zoom_start=15, control_scale=True)
         folium.Marker(
             [lat, lon],
-            popup=selected_row["College"],
-            tooltip=selected_row["College"]
+            popup=safe_text(selected_row["College"]),
+            tooltip=safe_text(selected_row["College"])
         ).add_to(fmap)
         st_folium(fmap, width=None, height=430)
     else:
@@ -512,14 +563,11 @@ all_college_names = filtered["College"].tolist()
 
 if st.button("Run Market Analysis"):
     with st.spinner("Generating market analysis..."):
-        try:
-            analysis_result = run_market_analysis(selected_pin, district, all_college_names)
-            st.markdown('<div class="result-box">', unsafe_allow_html=True)
-            st.markdown("#### Analysis Result")
-            st.write(analysis_result)
-            st.markdown('</div>', unsafe_allow_html=True)
-        except Exception as e:
-            st.error(f"Market analysis failed: {e}")
+        analysis_result = run_market_analysis(selected_pin, district, all_college_names)
+        st.markdown('<div class="result-box">', unsafe_allow_html=True)
+        st.markdown("#### Analysis Result")
+        st.write(analysis_result)
+        st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown('</div>', unsafe_allow_html=True)
 
@@ -535,13 +583,10 @@ st.markdown(
 
 if st.button("Run Local Industrial Analysis"):
     with st.spinner("Generating local industrial/company analysis..."):
-        try:
-            industry_result = run_industry_analysis(selected_pin, district, all_college_names)
-            st.markdown('<div class="result-box">', unsafe_allow_html=True)
-            st.markdown("#### Industrial / Company Analysis Result")
-            st.write(industry_result)
-            st.markdown('</div>', unsafe_allow_html=True)
-        except Exception as e:
-            st.error(f"Industrial/company analysis failed: {e}")
+        industry_result = run_industry_analysis(selected_pin, district, all_college_names)
+        st.markdown('<div class="result-box">', unsafe_allow_html=True)
+        st.markdown("#### Industrial / Company Analysis Result")
+        st.write(industry_result)
+        st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown('</div>', unsafe_allow_html=True)
