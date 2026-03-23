@@ -340,6 +340,11 @@ def load_data_from_pdf(pdf_path: str) -> pd.DataFrame:
     if df.empty:
         return df
 
+    df["College"] = df["College"].astype(str).str.strip()
+    df["Address"] = df["Address"].astype(str).str.strip()
+    df["District"] = df["District"].astype(str).str.strip()
+    df["PIN"] = df["PIN"].astype(str).str.strip()
+
     return df.dropna().drop_duplicates().reset_index(drop=True)
 
 @st.cache_data(show_spinner=False)
@@ -356,14 +361,29 @@ def geocode_address(address: str) -> Optional[Tuple[float, float]]:
         return None
     return None
 
-def run_market_analysis(pin: str, district: str, colleges: list[str]) -> str:
+@st.cache_data(show_spinner=False)
+def geocode_district(district: str) -> Optional[Tuple[float, float]]:
+    geolocator = get_geolocator()
+    query = f"{district}, West Bengal, India"
+    try:
+        loc = geolocator.geocode(query, timeout=10)
+        if loc:
+            return (loc.latitude, loc.longitude)
+    except (GeocoderTimedOut, GeocoderServiceError):
+        return None
+    except Exception:
+        return None
+    return None
+
+def run_market_analysis(filter_type: str, location_value: str, district: str, colleges: list[str]) -> str:
     prompt = f"""
 You are a professional market analyst.
 
 Analyze the business potential of this location based on student presence.
 
 Location Details:
-PIN Code: {pin}
+Filter Type: {filter_type}
+Selected Value: {location_value}
 District: {district}
 Nearby Colleges: {", ".join(colleges)}
 
@@ -377,14 +397,15 @@ Keep it simple, practical, and structured.
 """
     return ask_ollama(prompt)
 
-def run_industry_analysis(pin: str, district: str, colleges: list[str]) -> str:
+def run_industry_analysis(filter_type: str, location_value: str, district: str, colleges: list[str]) -> str:
     prompt = f"""
 You are a local industrial and business opportunity analyst.
 
 Analyze the local industrial/company potential of this location in West Bengal.
 
 Location Details:
-PIN Code: {pin}
+Filter Type: {filter_type}
+Selected Value: {location_value}
 District: {district}
 Nearby Colleges: {", ".join(colleges)}
 
@@ -422,17 +443,32 @@ if df.empty:
 # FILTER BAR
 # ---------------------------------------------------
 st.markdown('<div class="panel">', unsafe_allow_html=True)
-f1, f2 = st.columns([1.1, 2.6])
 
-with f1:
-    pin_options = sorted(df["PIN"].astype(str).unique().tolist())
-    selected_pin = st.selectbox("Select PIN Code", pin_options, index=0)
+top1, top2, top3 = st.columns([1.1, 1.3, 2.2])
 
-with f2:
+with top1:
+    filter_mode = st.selectbox("Select Mode", ["PIN Code", "District"], index=0)
+
+with top2:
+    if filter_mode == "PIN Code":
+        pin_options = sorted(df["PIN"].astype(str).unique().tolist())
+        selected_value = st.selectbox("Select PIN Code", pin_options, index=0)
+        filtered = df[df["PIN"].astype(str) == str(selected_value)].reset_index(drop=True)
+    else:
+        district_options = sorted(df["District"].astype(str).unique().tolist())
+        selected_value = st.selectbox("Select District", district_options, index=0)
+        filtered = df[df["District"].astype(str) == str(selected_value)].reset_index(drop=True)
+
+with top3:
+    if filter_mode == "PIN Code":
+        helper_text = "Choose a PIN code to view matching colleges, map location, and AI-based market analysis."
+    else:
+        helper_text = "Choose a district to view all matching colleges, district coverage, map location, and AI-based market analysis."
+
     st.markdown(
-        """
+        f"""
         <div style="padding-top: 33px; font-size: 0.98rem; color: #222;">
-            Choose a PIN code to view matching colleges, map location, and AI-based market analysis.
+            {html_escape(helper_text)}
         </div>
         """,
         unsafe_allow_html=True
@@ -440,14 +476,13 @@ with f2:
 
 st.markdown('</div>', unsafe_allow_html=True)
 
-filtered = df[df["PIN"].astype(str) == str(selected_pin)].reset_index(drop=True)
-
 if filtered.empty:
-    st.warning("No colleges found for the selected PIN code.")
+    st.warning(f"No colleges found for the selected {filter_mode.lower()}.")
     st.stop()
 
 district = safe_text(filtered.iloc[0]["District"])
 college_count = len(filtered)
+pin_count = filtered["PIN"].nunique()
 
 # ---------------------------------------------------
 # METRICS
@@ -458,17 +493,21 @@ with m1:
     st.markdown(f"""
     <div class="metric-card">
         <div class="metric-label">District</div>
-        <div class="metric-value">{html_escape(district)}</div>
+        <div class="metric-value">{html_escape(district if filter_mode == "PIN Code" else selected_value)}</div>
         <div class="metric-sub">Selected area district</div>
     </div>
     """, unsafe_allow_html=True)
 
 with m2:
+    label_2 = "PIN Code" if filter_mode == "PIN Code" else "PIN Coverage"
+    value_2 = html_escape(selected_value) if filter_mode == "PIN Code" else pin_count
+    sub_2 = "Active market location" if filter_mode == "PIN Code" else "Unique PINs in this district"
+
     st.markdown(f"""
     <div class="metric-card">
-        <div class="metric-label">PIN Code</div>
-        <div class="metric-value">{html_escape(selected_pin)}</div>
-        <div class="metric-sub">Active market location</div>
+        <div class="metric-label">{label_2}</div>
+        <div class="metric-value">{value_2}</div>
+        <div class="metric-sub">{sub_2}</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -477,7 +516,7 @@ with m3:
     <div class="metric-card">
         <div class="metric-label">Colleges Found</div>
         <div class="metric-value">{college_count}</div>
-        <div class="metric-sub">Institutions in this PIN</div>
+        <div class="metric-sub">Institutions in this selection</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -493,8 +532,14 @@ college_options = filtered["College"].tolist()
 with left_col:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="section-title">🎓 Colleges</div>', unsafe_allow_html=True)
+
+    if filter_mode == "PIN Code":
+        note_text = "Select a college to view its address and map location."
+    else:
+        note_text = "Select a college from this district to view its address and map location."
+
     st.markdown(
-        '<div class="section-note">Select a college to view its address and map location.</div>',
+        f'<div class="section-note">{html_escape(note_text)}</div>',
         unsafe_allow_html=True
     )
 
@@ -510,6 +555,8 @@ with left_col:
     <div class="college-box">
         <div class="college-name">{html_escape(selected_row['College'])}</div>
         <div class="college-address">📍 {html_escape(selected_row['Address'])}</div>
+        <div class="college-address" style="margin-top:6px;">🏙️ District: {html_escape(selected_row['District'])}</div>
+        <div class="college-address" style="margin-top:6px;">📮 PIN: {html_escape(selected_row['PIN'])}</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -517,23 +564,57 @@ with left_col:
 
 with right_col:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">🗺️ College Map</div>', unsafe_allow_html=True)
 
-    coords = geocode_address(safe_text(selected_row["Address"]))
+    if filter_mode == "PIN Code":
+        st.markdown('<div class="section-title">🗺️ College Map</div>', unsafe_allow_html=True)
+        coords = geocode_address(safe_text(selected_row["Address"]))
 
-    if coords:
-        lat, lon = coords
-        fmap = folium.Map(location=[lat, lon], zoom_start=15, control_scale=True)
-        folium.Marker(
-            [lat, lon],
-            popup=safe_text(selected_row["College"]),
-            tooltip=safe_text(selected_row["College"])
-        ).add_to(fmap)
-        st_folium(fmap, width=None, height=430)
+        if coords:
+            lat, lon = coords
+            fmap = folium.Map(location=[lat, lon], zoom_start=15, control_scale=True)
+            folium.Marker(
+                [lat, lon],
+                popup=safe_text(selected_row["College"]),
+                tooltip=safe_text(selected_row["College"])
+            ).add_to(fmap)
+            st_folium(fmap, width=None, height=430)
+        else:
+            st.warning("Map location could not be found for this address.")
     else:
-        st.warning("Map location could not be found for this address.")
+        st.markdown('<div class="section-title">🗺️ District Map</div>', unsafe_allow_html=True)
+        coords = geocode_district(selected_value)
+
+        if coords:
+            lat, lon = coords
+            fmap = folium.Map(location=[lat, lon], zoom_start=10, control_scale=True)
+
+            for _, row in filtered.iterrows():
+                college_coords = geocode_address(safe_text(row["Address"]))
+                if college_coords:
+                    c_lat, c_lon = college_coords
+                    folium.Marker(
+                        [c_lat, c_lon],
+                        popup=safe_text(row["College"]),
+                        tooltip=safe_text(row["College"])
+                    ).add_to(fmap)
+
+            st_folium(fmap, width=None, height=430)
+        else:
+            st.warning("District map location could not be found.")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
+# ---------------------------------------------------
+# TABLE VIEW
+# ---------------------------------------------------
+st.markdown('<div class="panel">', unsafe_allow_html=True)
+st.markdown('<div class="section-title">📋 College Data</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="section-note">View all colleges for the selected filter.</div>',
+    unsafe_allow_html=True
+)
+st.dataframe(filtered[["College", "Address", "District", "PIN"]], use_container_width=True)
+st.markdown('</div>', unsafe_allow_html=True)
 
 # ---------------------------------------------------
 # MARKET ANALYSIS
@@ -541,15 +622,16 @@ with right_col:
 st.markdown('<div class="panel">', unsafe_allow_html=True)
 st.markdown('<div class="section-title">📊 Market Analysis</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="section-note">Generate PIN-wise business and student market analysis using TinyLlama.</div>',
+    '<div class="section-note">Generate business and student market analysis using TinyLlama.</div>',
     unsafe_allow_html=True
 )
 
 all_college_names = filtered["College"].tolist()
+analysis_location = selected_value
 
 if st.button("Run Market Analysis"):
     with st.spinner("Generating market analysis..."):
-        analysis_result = run_market_analysis(selected_pin, district, all_college_names)
+        analysis_result = run_market_analysis(filter_mode, analysis_location, district, all_college_names)
         st.markdown('<div class="result-box">', unsafe_allow_html=True)
         st.markdown("#### Analysis Result")
         st.write(analysis_result)
@@ -563,13 +645,13 @@ st.markdown('</div>', unsafe_allow_html=True)
 st.markdown('<div class="panel">', unsafe_allow_html=True)
 st.markdown('<div class="section-title">🏭 Local Industrial / Company Analysis</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="section-note">Generate a practical industrial and company opportunity analysis for this PIN using TinyLlama.</div>',
+    '<div class="section-note">Generate a practical industrial and company opportunity analysis using TinyLlama.</div>',
     unsafe_allow_html=True
 )
 
 if st.button("Run Local Industrial Analysis"):
     with st.spinner("Generating local industrial/company analysis..."):
-        industry_result = run_industry_analysis(selected_pin, district, all_college_names)
+        industry_result = run_industry_analysis(filter_mode, analysis_location, district, all_college_names)
         st.markdown('<div class="result-box">', unsafe_allow_html=True)
         st.markdown("#### Industrial / Company Analysis Result")
         st.write(industry_result)
